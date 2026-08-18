@@ -179,8 +179,12 @@ class Logic(PluginModuleBase):
                 return jsonify({'ret': 'success', 'msg': '미디어 정보 확인을 시작했습니다.', 'data': status})
             if sub == 'start_preview':
                 result = manager.store.get(req.form.get('id', ''))
+                if result.get('scrambled'):
+                    raise RuntimeError('암호화된 IPTV 채널은 미리보기할 수 없습니다.')
                 if not result.get('probe_ok'):
                     result = manager.store.update_probe(result['id'], probe_stream(result, build_config(req)))
+                if result.get('scrambled'):
+                    raise RuntimeError('암호화된 IPTV 채널은 미리보기할 수 없습니다.')
                 if not result.get('video_codec'):
                     raise RuntimeError('영상 스트림 정보를 확인하지 못했습니다.')
                 preview_manager.start(
