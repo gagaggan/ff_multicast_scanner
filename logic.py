@@ -14,6 +14,7 @@ from .result_store import (
     endpoint_key,
     existing_endpoint_keys,
     load_iproxy_channels,
+    load_iproxy_encoder_settings,
 )
 from .scanner import ScanConfig, ScanValidationError, expand_target_specs, probe_stream
 from .setup import P
@@ -95,6 +96,20 @@ def export_channels(include_existing=False):
         except Exception:
             logger.warning('Unable to read I-Proxy channels while exporting', exc_info=True)
     return build_iproxy_channels(manager.store.load(), excluded_endpoints=excluded, enabled_only=True)
+
+
+def start_preview_session(result):
+    try:
+        encoder_settings = load_iproxy_encoder_settings(ModelSetting.get('iproxy_db_path'))
+    except Exception:
+        logger.warning('Unable to read I-Proxy encoder settings; using libx264', exc_info=True)
+        encoder_settings = {'video_encoder': 'libx264', 'vaapi_device': ''}
+    return preview_manager.start(
+        result,
+        ffmpeg_path=ModelSetting.get('ffmpeg_path') or 'ffmpeg',
+        interface_address=ModelSetting.get('interface_address') or '0.0.0.0',
+        **encoder_settings,
+    )
 
 
 class Logic(PluginModuleBase):
@@ -194,11 +209,7 @@ class Logic(PluginModuleBase):
                     raise RuntimeError('오디오 전용 채널은 영상 미리보기를 지원하지 않습니다.')
                 if not result.get('video_codec'):
                     raise RuntimeError('영상 스트림 정보를 확인하지 못했습니다.')
-                preview_manager.start(
-                    result,
-                    ffmpeg_path=ModelSetting.get('ffmpeg_path') or 'ffmpeg',
-                    interface_address=ModelSetting.get('interface_address') or '0.0.0.0',
-                )
+                start_preview_session(result)
                 base = get_base_url(req)
                 preview_url = with_apikey(f'{base}/api/preview/{result["id"]}.m3u8')
                 return jsonify({
@@ -295,11 +306,7 @@ def api_preview_playlist(result_id):
     require_api_key(request)
     result = _preview_result(result_id)
     try:
-        preview_manager.start(
-            result,
-            ffmpeg_path=ModelSetting.get('ffmpeg_path') or 'ffmpeg',
-            interface_address=ModelSetting.get('interface_address') or '0.0.0.0',
-        )
+        start_preview_session(result)
         playlist = preview_manager.playlist_path(result_id)
         base = get_base_url(request)
         lines = []

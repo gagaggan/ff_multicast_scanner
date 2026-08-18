@@ -50,6 +50,24 @@ class PreviewServiceTest(unittest.TestCase):
         self.assertEqual(h264[h264.index('-c:a') + 1], 'aac')
         self.assertEqual(hevc[hevc.index('-c:a') + 1], 'aac')
 
+    def test_uses_iproxy_vaapi_encoder_and_downscales_uhd(self):
+        with tempfile.TemporaryDirectory() as directory:
+            command = build_ffmpeg_command(
+                'ffmpeg',
+                'rtp://239.1.2.3:49220',
+                Path(directory),
+                'hevc',
+                'aac',
+                video_encoder='h264_vaapi',
+                vaapi_device='/dev/dri/renderD128',
+                width=3840,
+                height=2160,
+            )
+        self.assertEqual(command[command.index('-c:v') + 1], 'h264_vaapi')
+        self.assertEqual(command[command.index('-vaapi_device') + 1], '/dev/dri/renderD128')
+        self.assertEqual(command[command.index('-vf') + 1], 'scale=1280:720,format=nv12,hwupload')
+        self.assertIn('8192', command)
+
     def test_stale_cleanup_cannot_remove_replacement_session(self):
         with tempfile.TemporaryDirectory() as directory:
             manager = PreviewManager(directory)
@@ -82,6 +100,27 @@ class PreviewServiceTest(unittest.TestCase):
             self.assertFalse(stopped)
             self.assertIs(manager._sessions[item_id], session)
             self.assertTrue(manager._session_dir(item_id).exists())
+
+    def test_fallback_session_keeps_requested_encoder_profile(self):
+        with tempfile.TemporaryDirectory() as directory:
+            manager = PreviewManager(directory)
+            manager._sessions['channel'] = {
+                'process': FakeProcess(),
+                'last_access': 100,
+                'stderr': [],
+                'encoder_profile': ('h264_vaapi', '/dev/dri/renderD128'),
+            }
+            manager._session_dir('channel').mkdir(parents=True)
+            manager.playlist_path('channel').write_text('#EXTM3U\nsegment_00001.ts\n', encoding='utf-8')
+
+            result = manager.start(
+                {'id': 'channel', 'url': 'udp://239.1.2.3:49220'},
+                video_encoder='h264_vaapi',
+                vaapi_device='/dev/dri/renderD128',
+            )
+
+            self.assertEqual(result, 'channel')
+            self.assertFalse(manager._sessions['channel']['process'].terminated)
 
 
 if __name__ == '__main__':

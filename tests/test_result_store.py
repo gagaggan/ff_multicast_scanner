@@ -11,6 +11,7 @@ from result_store import (
     endpoint_key,
     existing_endpoint_keys,
     load_iproxy_channels,
+    load_iproxy_encoder_settings,
 )
 
 
@@ -84,11 +85,23 @@ class ResultStoreTest(unittest.TestCase):
             'INSERT INTO ff_iproxy_setting VALUES (?, ?, ?)',
             (1, 'manual_channels', json.dumps(channels)),
         )
+        connection.execute(
+            'INSERT INTO ff_iproxy_setting VALUES (?, ?, ?)',
+            (2, 'hls_h264_encoder', 'h264_vaapi'),
+        )
+        connection.execute(
+            'INSERT INTO ff_iproxy_setting VALUES (?, ?, ?)',
+            (3, 'hls_vaapi_device', '/dev/dri/renderD128'),
+        )
         connection.commit()
         connection.close()
         loaded = load_iproxy_channels(database)
         self.assertEqual(loaded, channels)
         self.assertEqual(existing_endpoint_keys(loaded), {'239.192.67.98:49220'})
+        self.assertEqual(load_iproxy_encoder_settings(database), {
+            'video_encoder': 'h264_vaapi',
+            'vaapi_device': '/dev/dri/renderD128',
+        })
 
     def test_updates_probe_without_incrementing_seen_count(self):
         stored = self.store.merge({
