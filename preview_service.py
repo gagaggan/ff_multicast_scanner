@@ -65,25 +65,25 @@ def build_ffmpeg_command(ffmpeg_path, source_url, output_dir, video_codec='', au
         '-sn',
         '-dn',
     ]
-    if video_codec in ('h264', 'avc'):
-        command.extend(['-c:v', 'copy'])
-    else:
-        command.extend([
-            '-c:v',
-            'libx264',
-            '-preset',
-            'veryfast',
-            '-crf',
-            '23',
-            '-pix_fmt',
-            'yuv420p',
-            '-g',
-            '60',
-            '-keyint_min',
-            '60',
-            '-sc_threshold',
-            '0',
-        ])
+    # Re-encode every preview video. Live multicast sources can contain
+    # damaged references/SPS data; copying H.264 would pass that corruption
+    # to the browser and make the HLS MediaSource abort.
+    command.extend([
+        '-c:v',
+        'libx264',
+        '-preset',
+        'veryfast',
+        '-crf',
+        '23',
+        '-pix_fmt',
+        'yuv420p',
+        '-g',
+        '60',
+        '-keyint_min',
+        '60',
+        '-sc_threshold',
+        '0',
+    ])
     if audio_codec == 'aac':
         command.extend(['-c:a', 'copy'])
     else:
