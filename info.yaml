@@ -1,5 +1,5 @@
 title: "Multicast Scanner"
-version: "0.3.0"
+version: "0.3.1"
 package_name: "ff_multicast_scanner"
 developer: "gagaggan"
 description: "IPTV 멀티캐스트 MPEG-TS 채널을 검색하고 I-Proxy 호환 목록으로 내보내는 플러그인"
