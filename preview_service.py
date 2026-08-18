@@ -36,6 +36,9 @@ def build_input_url(url, interface_address='0.0.0.0'):
     query['localaddr'] = [str(interface_address or '0.0.0.0')]
     query['overrun_nonfatal'] = ['1']
     query['fifo_size'] = ['5000000']
+    # Multicast bursts can overflow the small OS UDP receive buffer before
+    # FFmpeg's FIFO gets a chance to absorb them.
+    query['buffer_size'] = ['16777216']
     query['timeout'] = ['10000000']
     return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query, doseq=True)))
 
