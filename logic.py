@@ -152,6 +152,9 @@ class Logic(PluginModuleBase):
             for result in manager.store.load():
                 row = dict(result)
                 row['existing'] = endpoint_key(row.get('url')) in existing
+                row['audio_only'] = bool(row.get('audio_only')) or (
+                    bool(row.get('audio_codec')) and not bool(row.get('video_codec'))
+                )
                 arg['results'].append(row)
             base = get_base_url(req)
             arg['json_url'] = with_apikey(f'{base}/api/results.json')
@@ -181,10 +184,14 @@ class Logic(PluginModuleBase):
                 result = manager.store.get(req.form.get('id', ''))
                 if result.get('scrambled'):
                     raise RuntimeError('암호화된 IPTV 채널은 미리보기할 수 없습니다.')
+                if result.get('audio_only') or (result.get('audio_codec') and not result.get('video_codec')):
+                    raise RuntimeError('오디오 전용 채널은 영상 미리보기를 지원하지 않습니다.')
                 if not result.get('probe_ok'):
                     result = manager.store.update_probe(result['id'], probe_stream(result, build_config(req)))
                 if result.get('scrambled'):
                     raise RuntimeError('암호화된 IPTV 채널은 미리보기할 수 없습니다.')
+                if result.get('audio_only') or (result.get('audio_codec') and not result.get('video_codec')):
+                    raise RuntimeError('오디오 전용 채널은 영상 미리보기를 지원하지 않습니다.')
                 if not result.get('video_codec'):
                     raise RuntimeError('영상 스트림 정보를 확인하지 못했습니다.')
                 preview_manager.start(

@@ -30,6 +30,18 @@
     </div>
   </div>
 
+  <div class="d-flex flex-wrap align-items-center mb-2">
+    <div class="custom-control custom-checkbox mr-3">
+      <input type="checkbox" class="custom-control-input result-filter" id="hide_scrambled" checked>
+      <label class="custom-control-label" for="hide_scrambled">암호화 채널 숨기기</label>
+    </div>
+    <div class="custom-control custom-checkbox mr-3">
+      <input type="checkbox" class="custom-control-input result-filter" id="hide_audio_only" checked>
+      <label class="custom-control-label" for="hide_audio_only">오디오 전용 숨기기</label>
+    </div>
+    <span id="filter_status" class="small text-muted"></span>
+  </div>
+
   <div class="table-responsive">
     <table class="table table-sm table-striped table-hover">
       <thead class="thead-dark">
@@ -39,16 +51,16 @@
       </thead>
       <tbody>
       {% for row in arg['results'] %}
-        <tr data-result-id="{{ row['id']|e }}"{% if row['scrambled']|default(false) %} class="table-warning"{% endif %}>
+        <tr data-result-id="{{ row['id']|e }}" data-scrambled="{{ 'true' if row['scrambled']|default(false) else 'false' }}" data-audio-only="{{ 'true' if row['audio_only']|default(false) else 'false' }}"{% if row['scrambled']|default(false) %} class="table-warning"{% elif row['audio_only']|default(false) %} class="table-info"{% endif %}>
           <td><input class="result-enabled" type="checkbox" {% if row['enabled'] %}checked{% endif %}{% if row['scrambled']|default(false) %} disabled{% endif %}></td>
           <td><input class="form-control form-control-sm result-name" value="{{ row['name']|e }}"></td>
           <td><code>{{ row['url']|e }}</code></td>
-          <td>{{ row['video_codec']|default('', true)|e }}</td>
+          <td>{% if row['audio_only']|default(false) %}<span class="text-muted">오디오 전용</span>{% else %}{{ row['video_codec']|default('', true)|e }}{% endif %}</td>
           <td>{% if row['width']|default(0) %}{{ row['width'] }}×{{ row['height'] }}{% endif %}</td>
           <td>{% if row['bit_rate']|default(0) %}{% if row['bit_rate_source']|default('') == 'measured' %}≈{% endif %}{{ (row['bit_rate'] / 1000000)|round(1) }} Mbps{% endif %}</td>
-          <td>{% if row['scrambled']|default(false) %}<span class="badge badge-warning" title="표본 {{ row['sample_ts_packets']|default(0) }}개 중 {{ row['scrambled_ts_packets']|default(0) }}개 암호화">암호화</span>{% elif row['existing'] %}<span class="badge badge-secondary">기존</span>{% elif row['probe_ok'] %}<span class="badge badge-success">검증</span>{% else %}<span class="badge badge-info">감지</span>{% endif %}</td>
+          <td>{% if row['scrambled']|default(false) %}<span class="badge badge-warning" title="표본 {{ row['sample_ts_packets']|default(0) }}개 중 {{ row['scrambled_ts_packets']|default(0) }}개 암호화">암호화</span>{% elif row['audio_only']|default(false) %}<span class="badge badge-info" title="{{ row['audio_codec']|default('', true)|e }} 오디오 스트림만 감지됨">라디오</span>{% elif row['existing'] %}<span class="badge badge-secondary">기존</span>{% elif row['probe_ok'] %}<span class="badge badge-success">검증</span>{% else %}<span class="badge badge-info">감지</span>{% endif %}</td>
           <td class="text-nowrap">
-            <button class="btn btn-sm btn-outline-success play-result" title="{% if row['scrambled']|default(false) %}암호화된 채널은 미리보기할 수 없습니다.{% else %}FFmpeg 미리보기{% endif %}"{% if row['scrambled']|default(false) %} disabled{% endif %}><i class="fa fa-play" aria-hidden="true"></i></button>
+            <button class="btn btn-sm btn-outline-success play-result" title="{% if row['scrambled']|default(false) %}암호화된 채널은 미리보기할 수 없습니다.{% elif row['audio_only']|default(false) %}오디오 전용 채널은 영상 미리보기를 지원하지 않습니다.{% else %}FFmpeg 미리보기{% endif %}"{% if row['scrambled']|default(false) or row['audio_only']|default(false) %} disabled{% endif %}><i class="fa fa-play" aria-hidden="true"></i></button>
             <button class="btn btn-sm btn-outline-primary save-result">저장</button>
           </td>
         </tr>
@@ -70,6 +82,40 @@
 <script>
 const initialStatus = {{ arg['status']|tojson }};
 let probeWasActive = initialStatus.state === 'probing';
+
+function loadFilterPreference(key, defaultValue) {
+  try {
+    const saved = window.localStorage.getItem(key);
+    return saved === null ? defaultValue : saved === 'true';
+  } catch (_error) {
+    return defaultValue;
+  }
+}
+
+function saveFilterPreference(key, value) {
+  try {
+    window.localStorage.setItem(key, String(value));
+  } catch (_error) {
+    // Filtering still works for this page when local storage is unavailable.
+  }
+}
+
+function applyResultFilters() {
+  const hideScrambled = $('#hide_scrambled').is(':checked');
+  const hideAudioOnly = $('#hide_audio_only').is(':checked');
+  let hidden = 0;
+  $('tr[data-result-id]').each(function() {
+    const row = $(this);
+    const shouldHide =
+      (hideScrambled && row.attr('data-scrambled') === 'true') ||
+      (hideAudioOnly && row.attr('data-audio-only') === 'true');
+    row.toggle(!shouldHide);
+    if (shouldHide) hidden += 1;
+  });
+  $('#filter_status').text(hidden ? `${hidden}개 숨김` : '모두 표시 중');
+  saveFilterPreference('ff_multicast_hide_scrambled', hideScrambled);
+  saveFilterPreference('ff_multicast_hide_audio_only', hideAudioOnly);
+}
 
 function renderProbeStatus(status) {
   const active = status.state === 'probing';
@@ -107,6 +153,8 @@ $('#probe_all').on('click', function() {
     }
   });
 });
+
+$('.result-filter').on('change', applyResultFilters);
 
 $('.play-result').on('click', function() {
   const button = $(this);
@@ -159,6 +207,9 @@ $('#clear_results').on('click', function() {
   });
 });
 
+$('#hide_scrambled').prop('checked', loadFilterPreference('ff_multicast_hide_scrambled', true));
+$('#hide_audio_only').prop('checked', loadFilterPreference('ff_multicast_hide_audio_only', true));
+applyResultFilters();
 renderProbeStatus(initialStatus);
 </script>
 {% endblock %}

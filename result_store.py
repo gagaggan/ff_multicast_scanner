@@ -128,6 +128,7 @@ class ResultStore:
             'height',
             'frame_rate',
             'audio_codec',
+            'audio_only',
             'program_count',
             'sample_ts_packets',
             'scrambled_ts_packets',

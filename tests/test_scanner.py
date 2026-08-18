@@ -82,6 +82,22 @@ class ScannerTest(unittest.TestCase):
         self.assertEqual(parsed['height'], 1080)
         self.assertEqual(parsed['bit_rate'], 10000000)
         self.assertEqual(parsed['bit_rate_source'], 'reported')
+        self.assertFalse(parsed['audio_only'])
+
+    def test_classifies_audio_only_stream(self):
+        raw = json.dumps({
+            'programs': [{'program_id': 102}],
+            'streams': [
+                {'codec_type': 'audio', 'codec_name': 'ac3'},
+                {'codec_tag_string': '[11][0][0][0]'},
+            ],
+            'format': {'format_name': 'rtp', 'bit_rate': '384000'},
+        })
+        parsed = parse_ffprobe_output(raw)
+        self.assertTrue(parsed['probe_ok'])
+        self.assertTrue(parsed['audio_only'])
+        self.assertEqual(parsed['video_codec'], '')
+        self.assertEqual(parsed['audio_codec'], 'ac3')
 
     def test_calculates_bitrate_from_packet_sample(self):
         raw = json.dumps({
