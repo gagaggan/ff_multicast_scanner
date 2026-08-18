@@ -235,6 +235,7 @@ def _probe_url(url, interface_address, timeout_seconds):
     query['timeout'] = [str(int(float(timeout_seconds) * 1_000_000))]
     query['overrun_nonfatal'] = ['1']
     query['fifo_size'] = ['1000000']
+    query['buffer_size'] = ['16777216']
     return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query, doseq=True)))
 
 
