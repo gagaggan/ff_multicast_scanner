@@ -360,6 +360,7 @@ def parse_ffprobe_output(raw, bitrate_sample_seconds=BITRATE_SAMPLE_SECONDS):
         'height': int(video.get('height') or 0),
         'frame_rate': video.get('avg_frame_rate') or '',
         'audio_codec': audio.get('codec_name') or '',
+        'audio_only': bool(audio) and not bool(video),
         'program_count': len(programmes),
     }
 
