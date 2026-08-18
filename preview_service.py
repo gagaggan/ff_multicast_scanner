@@ -43,22 +43,41 @@ def build_input_url(url, interface_address='0.0.0.0'):
     return urllib.parse.urlunparse(parsed._replace(query=urllib.parse.urlencode(query, doseq=True)))
 
 
-def build_ffmpeg_command(ffmpeg_path, source_url, output_dir, video_codec='', audio_codec=''):
+def build_ffmpeg_command(
+    ffmpeg_path,
+    source_url,
+    output_dir,
+    video_codec='',
+    audio_codec='',
+    video_encoder='libx264',
+    vaapi_device='',
+    width=0,
+    height=0,
+):
     output_dir = Path(output_dir)
     video_codec = str(video_codec or '').strip().lower()
     audio_codec = str(audio_codec or '').strip().lower()
+    video_encoder = str(video_encoder or 'libx264').strip()
+    if video_encoder not in ('libx264', 'h264_nvenc', 'h264_qsv', 'h264_vaapi'):
+        video_encoder = 'libx264'
     command = [
         str(ffmpeg_path or 'ffmpeg'),
         '-hide_banner',
         '-nostdin',
         '-loglevel',
         'warning',
+    ]
+    if video_encoder == 'h264_vaapi':
+        command.extend(['-vaapi_device', str(vaapi_device or '/dev/dri/renderD128')])
+    command.extend([
         '-fflags',
         '+genpts+discardcorrupt',
         '-analyzeduration',
         '5000000',
         '-probesize',
         '5000000',
+        '-thread_queue_size',
+        '8192',
         '-i',
         source_url,
         '-map',
@@ -67,26 +86,40 @@ def build_ffmpeg_command(ffmpeg_path, source_url, output_dir, video_codec='', au
         '0:a:0?',
         '-sn',
         '-dn',
-    ]
+    ])
     # Re-encode every preview video. Live multicast sources can contain
     # damaged references/SPS data; copying H.264 would pass that corruption
     # to the browser and make the HLS MediaSource abort.
-    command.extend([
-        '-c:v',
-        'libx264',
-        '-preset',
-        'veryfast',
-        '-crf',
-        '23',
-        '-pix_fmt',
-        'yuv420p',
-        '-g',
-        '60',
-        '-keyint_min',
-        '60',
-        '-sc_threshold',
-        '0',
-    ])
+    if video_encoder == 'h264_vaapi':
+        video_filter = 'format=nv12,hwupload'
+        if int(width or 0) > 1920 or int(height or 0) > 1080:
+            # This driver can encode VAAPI frames but its scale_vaapi path is
+            # not reliable. Scale in system memory before uploading instead.
+            video_filter = 'scale=1280:720,format=nv12,hwupload'
+        command.extend([
+            '-vf', video_filter,
+            '-c:v', video_encoder,
+            '-b:v', '1500k',
+            '-maxrate', '1500k',
+            '-bufsize', '3000k',
+            '-g', '60',
+        ])
+    else:
+        command.extend(['-c:v', video_encoder])
+        if video_encoder == 'libx264':
+            command.extend(['-preset', 'veryfast', '-crf', '23', '-pix_fmt', 'yuv420p'])
+        elif video_encoder == 'h264_nvenc':
+            command.extend(['-preset', 'fast', '-pix_fmt', 'nv12'])
+        elif video_encoder == 'h264_qsv':
+            command.extend(['-preset', 'faster'])
+        command.extend([
+            '-b:v', '1500k',
+            '-maxrate', '1500k',
+            '-bufsize', '3000k',
+            '-g', '60',
+            '-keyint_min', '60',
+            '-sc_threshold', '0',
+        ])
     # AAC frames from multicast sources can also be malformed. Normalize the
     # audio so the browser never receives corrupt ADTS data or an unsupported
     # source profile.
@@ -156,14 +189,29 @@ class PreviewManager:
         except Exception:
             pass
 
-    def start(self, item, ffmpeg_path='ffmpeg', interface_address='0.0.0.0', ready_timeout=12):
+    def start(
+        self,
+        item,
+        ffmpeg_path='ffmpeg',
+        interface_address='0.0.0.0',
+        ready_timeout=12,
+        video_encoder='libx264',
+        vaapi_device='',
+        _requested_profile=None,
+    ):
         item_id = self._safe_id(item.get('id'))
         source_url = build_input_url(item.get('url'), interface_address)
+        video_encoder = str(video_encoder or 'libx264').strip()
+        encoder_profile = _requested_profile or (video_encoder, str(vaapi_device or '').strip())
         self._ensure_cleanup_thread()
         with self._start_lock:
             with self._lock:
                 existing = self._sessions.get(item_id)
-                if existing and existing['process'].poll() is None:
+                if (
+                    existing
+                    and existing['process'].poll() is None
+                    and existing.get('encoder_profile') == encoder_profile
+                ):
                     existing['last_access'] = time.time()
                     if self.playlist_path(item_id).exists():
                         return item_id
@@ -187,6 +235,10 @@ class PreviewManager:
                 session_dir,
                 video_codec=item.get('video_codec'),
                 audio_codec=item.get('audio_codec'),
+                video_encoder=video_encoder,
+                vaapi_device=vaapi_device,
+                width=item.get('width'),
+                height=item.get('height'),
             )
             try:
                 process = subprocess.Popen(
@@ -203,6 +255,7 @@ class PreviewManager:
                 'process': process,
                 'last_access': time.time(),
                 'stderr': [],
+                'encoder_profile': encoder_profile,
             }
             with self._lock:
                 self._sessions[item_id] = session
@@ -219,6 +272,15 @@ class PreviewManager:
                 if process.poll() is not None:
                     error = '\n'.join(session['stderr'][-4:]) or f'FFmpeg 종료 코드 {process.returncode}'
                     self.stop(item_id, expected_session=session)
+                    if video_encoder != 'libx264':
+                        return self.start(
+                            item,
+                            ffmpeg_path=ffmpeg_path,
+                            interface_address=interface_address,
+                            ready_timeout=ready_timeout,
+                            video_encoder='libx264',
+                            _requested_profile=encoder_profile,
+                        )
                     raise PreviewError(f'미리보기를 시작하지 못했습니다: {error[-600:]}')
                 if playlist.exists() and '.ts' in playlist.read_text(encoding='utf-8', errors='replace'):
                     self.touch(item_id)
@@ -227,6 +289,15 @@ class PreviewManager:
 
             error = '\n'.join(session['stderr'][-4:])
             self.stop(item_id, expected_session=session)
+            if video_encoder != 'libx264':
+                return self.start(
+                    item,
+                    ffmpeg_path=ffmpeg_path,
+                    interface_address=interface_address,
+                    ready_timeout=ready_timeout,
+                    video_encoder='libx264',
+                    _requested_profile=encoder_profile,
+                )
             suffix = f': {error[-500:]}' if error else ''
             raise PreviewError(f'미리보기 준비 시간이 초과됐습니다{suffix}')
 

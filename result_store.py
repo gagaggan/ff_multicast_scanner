@@ -181,6 +181,28 @@ def load_iproxy_channels(database_path):
     return [item for item in data if isinstance(item, dict) and item.get('url')]
 
 
+def load_iproxy_encoder_settings(database_path):
+    path = Path(str(database_path or '')).expanduser()
+    if not path.exists() or not path.is_file():
+        raise FileNotFoundError(f'I-Proxy DB를 찾을 수 없습니다: {path}')
+    connection = sqlite3.connect(path.resolve().as_uri() + '?mode=ro', uri=True, timeout=2)
+    try:
+        rows = connection.execute(
+            "SELECT key, value FROM ff_iproxy_setting "
+            "WHERE key IN ('hls_h264_encoder', 'hls_vaapi_device')"
+        ).fetchall()
+    finally:
+        connection.close()
+    values = {str(key): str(value or '').strip() for key, value in rows}
+    encoder = values.get('hls_h264_encoder') or 'libx264'
+    if encoder not in ('libx264', 'h264_nvenc', 'h264_qsv', 'h264_vaapi'):
+        encoder = 'libx264'
+    return {
+        'video_encoder': encoder,
+        'vaapi_device': values.get('hls_vaapi_device', ''),
+    }
+
+
 def existing_endpoint_keys(channels):
     return {endpoint_key(item.get('url')) for item in channels if endpoint_key(item.get('url'))}
 
