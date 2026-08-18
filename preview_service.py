@@ -116,7 +116,9 @@ class PreviewManager:
         self.idle_seconds = max(10, int(idle_seconds))
         self.max_sessions = max(1, int(max_sessions))
         self._lock = threading.RLock()
-        self._start_lock = threading.Lock()
+        # Session creation and removal both mutate the same directory.  Keep
+        # them serialized so cleanup cannot delete a replacement session.
+        self._start_lock = threading.RLock()
         self._sessions = {}
         self._cleanup_thread = None
 
@@ -171,10 +173,10 @@ class PreviewManager:
                     if session['process'].poll() is None and key != item_id
                 ]
             if existing:
-                self.stop(item_id)
+                self.stop(item_id, expected_session=existing)
             if len(active) >= self.max_sessions:
-                oldest_id, _session = min(active, key=lambda pair: pair[1]['last_access'])
-                self.stop(oldest_id)
+                oldest_id, oldest_session = min(active, key=lambda pair: pair[1]['last_access'])
+                self.stop(oldest_id, expected_session=oldest_session)
 
             session_dir = self._session_dir(item_id)
             shutil.rmtree(session_dir, ignore_errors=True)
@@ -216,7 +218,7 @@ class PreviewManager:
             while time.monotonic() < deadline:
                 if process.poll() is not None:
                     error = '\n'.join(session['stderr'][-4:]) or f'FFmpeg 종료 코드 {process.returncode}'
-                    self.stop(item_id)
+                    self.stop(item_id, expected_session=session)
                     raise PreviewError(f'미리보기를 시작하지 못했습니다: {error[-600:]}')
                 if playlist.exists() and '.ts' in playlist.read_text(encoding='utf-8', errors='replace'):
                     self.touch(item_id)
@@ -224,27 +226,37 @@ class PreviewManager:
                 time.sleep(0.2)
 
             error = '\n'.join(session['stderr'][-4:])
-            self.stop(item_id)
+            self.stop(item_id, expected_session=session)
             suffix = f': {error[-500:]}' if error else ''
             raise PreviewError(f'미리보기 준비 시간이 초과됐습니다{suffix}')
 
-    def stop(self, item_id):
+    def stop(self, item_id, expected_session=None, expired_before=None):
         item_id = self._safe_id(item_id)
-        with self._lock:
-            session = self._sessions.pop(item_id, None)
-        if session is not None:
-            process = session['process']
-            if process.poll() is None:
-                try:
-                    process.terminate()
-                    process.wait(timeout=2)
-                except Exception:
+        with self._start_lock:
+            with self._lock:
+                current = self._sessions.get(item_id)
+                if expected_session is not None and current is not expected_session:
+                    return False
+                if current is not None and expired_before is not None:
+                    still_running = current['process'].poll() is None
+                    recently_used = expired_before - current['last_access'] <= self.idle_seconds
+                    if still_running and recently_used:
+                        return False
+                session = self._sessions.pop(item_id, None)
+            if session is not None:
+                process = session['process']
+                if process.poll() is None:
                     try:
-                        process.kill()
+                        process.terminate()
                         process.wait(timeout=2)
                     except Exception:
-                        pass
-        shutil.rmtree(self._session_dir(item_id), ignore_errors=True)
+                        try:
+                            process.kill()
+                            process.wait(timeout=2)
+                        except Exception:
+                            pass
+            shutil.rmtree(self._session_dir(item_id), ignore_errors=True)
+            return True
 
     def touch(self, item_id):
         item_id = self._safe_id(item_id)
@@ -268,10 +280,10 @@ class PreviewManager:
             now = time.time()
             with self._lock:
                 expired = [
-                    item_id
+                    (item_id, session)
                     for item_id, session in self._sessions.items()
                     if session['process'].poll() is not None
                     or now - session['last_access'] > self.idle_seconds
                 ]
-            for item_id in expired:
-                self.stop(item_id)
+            for item_id, session in expired:
+                self.stop(item_id, expected_session=session, expired_before=now)
