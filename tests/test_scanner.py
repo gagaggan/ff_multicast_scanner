@@ -6,6 +6,7 @@ from scanner import (
     expand_target_specs,
     find_mpeg_ts_offset,
     is_rtp_payload,
+    mpeg_ts_packet_stats,
     parse_ffprobe_output,
 )
 
@@ -54,6 +55,15 @@ class ScannerTest(unittest.TestCase):
 
     def test_ignores_random_payload(self):
         self.assertIsNone(find_mpeg_ts_offset(bytes(range(256)) * 2))
+
+    def test_counts_scrambled_transport_stream_packets(self):
+        payload = bytearray(ts_payload(offset=12, packets=3))
+        payload[12 + 3] = 0x80
+        payload[12 + 188 + 1] = 0x80
+        stats = mpeg_ts_packet_stats(bytes(payload), 12)
+        self.assertEqual(stats['sample_ts_packets'], 3)
+        self.assertEqual(stats['scrambled_ts_packets'], 1)
+        self.assertEqual(stats['transport_error_packets'], 1)
 
     def test_parses_ffprobe_metadata(self):
         raw = json.dumps({

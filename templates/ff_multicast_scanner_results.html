@@ -39,16 +39,16 @@
       </thead>
       <tbody>
       {% for row in arg['results'] %}
-        <tr data-result-id="{{ row['id']|e }}">
-          <td><input class="result-enabled" type="checkbox" {% if row['enabled'] %}checked{% endif %}></td>
+        <tr data-result-id="{{ row['id']|e }}"{% if row['scrambled']|default(false) %} class="table-warning"{% endif %}>
+          <td><input class="result-enabled" type="checkbox" {% if row['enabled'] %}checked{% endif %}{% if row['scrambled']|default(false) %} disabled{% endif %}></td>
           <td><input class="form-control form-control-sm result-name" value="{{ row['name']|e }}"></td>
           <td><code>{{ row['url']|e }}</code></td>
           <td>{{ row['video_codec']|default('', true)|e }}</td>
           <td>{% if row['width']|default(0) %}{{ row['width'] }}×{{ row['height'] }}{% endif %}</td>
           <td>{% if row['bit_rate']|default(0) %}{% if row['bit_rate_source']|default('') == 'measured' %}≈{% endif %}{{ (row['bit_rate'] / 1000000)|round(1) }} Mbps{% endif %}</td>
-          <td>{% if row['existing'] %}<span class="badge badge-secondary">기존</span>{% elif row['probe_ok'] %}<span class="badge badge-success">검증</span>{% else %}<span class="badge badge-info">감지</span>{% endif %}</td>
+          <td>{% if row['scrambled']|default(false) %}<span class="badge badge-warning" title="표본 {{ row['sample_ts_packets']|default(0) }}개 중 {{ row['scrambled_ts_packets']|default(0) }}개 암호화">암호화</span>{% elif row['existing'] %}<span class="badge badge-secondary">기존</span>{% elif row['probe_ok'] %}<span class="badge badge-success">검증</span>{% else %}<span class="badge badge-info">감지</span>{% endif %}</td>
           <td class="text-nowrap">
-            <button class="btn btn-sm btn-outline-success play-result" title="FFmpeg 미리보기"><i class="fa fa-play" aria-hidden="true"></i></button>
+            <button class="btn btn-sm btn-outline-success play-result" title="{% if row['scrambled']|default(false) %}암호화된 채널은 미리보기할 수 없습니다.{% else %}FFmpeg 미리보기{% endif %}"{% if row['scrambled']|default(false) %} disabled{% endif %}><i class="fa fa-play" aria-hidden="true"></i></button>
             <button class="btn btn-sm btn-outline-primary save-result">저장</button>
           </td>
         </tr>
@@ -58,7 +58,7 @@
       </tbody>
     </table>
   </div>
-  <p class="small text-muted">비트레이트의 ≈ 표시는 FFprobe가 약 2초간 받은 MPEG-TS 패킷으로 계산한 측정값입니다.</p>
+  <p class="small text-muted">비트레이트의 ≈ 표시는 FFprobe가 약 2초간 받은 MPEG-TS 패킷으로 계산한 측정값입니다. 암호화 채널은 미리보기와 I-Proxy 내보내기에서 자동 제외됩니다.</p>
 </div>
 
 <form id="preview_form" method="post" action="/videojs" target="ff_multicast_preview">

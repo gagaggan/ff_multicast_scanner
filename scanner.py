@@ -152,6 +152,34 @@ def is_rtp_payload(payload, ts_offset):
     return version == 2 and ts_offset >= header_length
 
 
+def mpeg_ts_packet_stats(payload, ts_offset):
+    stats = {
+        'sample_ts_packets': 0,
+        'scrambled_ts_packets': 0,
+        'transport_error_packets': 0,
+    }
+    if ts_offset is None:
+        return stats
+    for position in range(ts_offset, len(payload) - TS_PACKET_SIZE + 1, TS_PACKET_SIZE):
+        packet = payload[position:position + TS_PACKET_SIZE]
+        if len(packet) != TS_PACKET_SIZE or packet[0] != 0x47:
+            continue
+        stats['sample_ts_packets'] += 1
+        if packet[1] & 0x80:
+            stats['transport_error_packets'] += 1
+        if (packet[3] >> 6) & 0x03:
+            stats['scrambled_ts_packets'] += 1
+    return stats
+
+
+def _finalize_scrambling_stats(stats):
+    sampled = int(stats.get('sample_ts_packets') or 0)
+    scrambled = int(stats.get('scrambled_ts_packets') or 0)
+    stats['scrambled'] = scrambled > 0
+    stats['scrambled_ratio'] = (scrambled / sampled) if sampled else 0.0
+    return stats
+
+
 def _membership(group, interface_address):
     return struct.pack('=4s4s', socket.inet_aton(group), socket.inet_aton(interface_address))
 
@@ -203,16 +231,26 @@ def scan_batch(groups, config, stop_event=None, error_callback=None):
                     continue
                 rtp = is_rtp_payload(payload, ts_offset)
                 scheme = 'rtp' if rtp else 'udp'
-                hits[group] = {
-                    'address': group,
-                    'port': config.port,
-                    'scheme': scheme,
-                    'url': f'{scheme}://{group}:{config.port}',
-                    'ts_offset': ts_offset,
-                    'sample_bytes': len(payload),
-                    'detected_at': utc_now(),
-                    'probe_ok': False,
-                }
+                hit = hits.get(group)
+                if hit is None:
+                    hit = {
+                        'address': group,
+                        'port': config.port,
+                        'scheme': scheme,
+                        'url': f'{scheme}://{group}:{config.port}',
+                        'ts_offset': ts_offset,
+                        'sample_bytes': 0,
+                        'sample_ts_packets': 0,
+                        'scrambled_ts_packets': 0,
+                        'transport_error_packets': 0,
+                        'detected_at': utc_now(),
+                        'probe_ok': False,
+                    }
+                    hits[group] = hit
+                packet_stats = mpeg_ts_packet_stats(payload, ts_offset)
+                hit['sample_bytes'] += len(payload)
+                for key in ('sample_ts_packets', 'scrambled_ts_packets', 'transport_error_packets'):
+                    hit[key] += packet_stats[key]
     finally:
         for receiver, (_group, membership) in list(receivers.items()):
             try:
@@ -223,7 +261,46 @@ def scan_batch(groups, config, stop_event=None, error_callback=None):
                 receiver.close()
             except OSError:
                 pass
-    return list(hits.values())
+    return [_finalize_scrambling_stats(hit) for hit in hits.values()]
+
+
+def sample_scrambling(url, interface_address, sample_seconds=0.75, max_datagrams=512):
+    parsed = urllib.parse.urlparse(str(url or ''))
+    group = parsed.hostname or ''
+    port = parsed.port or 0
+    receiver = None
+    membership = None
+    stats = {
+        'sample_ts_packets': 0,
+        'scrambled_ts_packets': 0,
+        'transport_error_packets': 0,
+    }
+    try:
+        receiver, membership = _open_group_socket(group, port, interface_address)
+        deadline = time.monotonic() + max(0.2, float(sample_seconds))
+        datagrams = 0
+        while datagrams < int(max_datagrams) and time.monotonic() < deadline:
+            wait = min(0.1, max(0.0, deadline - time.monotonic()))
+            readable, _, _ = select.select([receiver], [], [], wait)
+            if not readable:
+                continue
+            payload, _peer = receiver.recvfrom(65535)
+            ts_offset = find_mpeg_ts_offset(payload)
+            if ts_offset is None:
+                continue
+            packet_stats = mpeg_ts_packet_stats(payload, ts_offset)
+            for key in stats:
+                stats[key] += packet_stats[key]
+            datagrams += 1
+    finally:
+        if receiver is not None and membership is not None:
+            try:
+                receiver.setsockopt(socket.IPPROTO_IP, socket.IP_DROP_MEMBERSHIP, membership)
+            except OSError:
+                pass
+        if receiver is not None:
+            receiver.close()
+    return _finalize_scrambling_stats(stats)
 
 
 def _probe_url(url, interface_address, timeout_seconds):
@@ -289,6 +366,12 @@ def parse_ffprobe_output(raw, bitrate_sample_seconds=BITRATE_SAMPLE_SECONDS):
 
 def probe_stream(hit, config):
     result = dict(hit)
+    try:
+        scrambling_stats = sample_scrambling(hit['url'], config.interface_address)
+        if scrambling_stats.get('sample_ts_packets'):
+            result.update(scrambling_stats)
+    except (OSError, ValueError):
+        pass
     target = _probe_url(hit['url'], config.interface_address, config.ffprobe_timeout)
     command = [
         config.ffprobe_path,

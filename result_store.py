@@ -63,7 +63,7 @@ class ResultStore:
                     'id': result_id(hit.get('url')),
                     'name': hit.get('service_name') or f'채널 {hit.get("address")}',
                     'custom_name': False,
-                    'enabled': True,
+                    'enabled': not bool(hit.get('scrambled')),
                     'first_seen': hit.get('detected_at'),
                     'seen_count': 0,
                 }
@@ -80,6 +80,8 @@ class ResultStore:
             found['last_seen'] = hit.get('detected_at')
             found['seen_count'] = int(found.get('seen_count') or 0) + 1
             found.setdefault('enabled', True)
+            if found.get('scrambled'):
+                found['enabled'] = False
             results.sort(key=lambda item: tuple(int(part) for part in str(item.get('address') or '0.0.0.0').split('.')))
             self.save(results)
             return dict(found)
@@ -127,6 +129,11 @@ class ResultStore:
             'frame_rate',
             'audio_codec',
             'program_count',
+            'sample_ts_packets',
+            'scrambled_ts_packets',
+            'transport_error_packets',
+            'scrambled',
+            'scrambled_ratio',
         }
         with self._lock:
             results = self.load()
@@ -139,6 +146,8 @@ class ResultStore:
                         item[key] = metadata[key]
                 if metadata.get('probe_ok'):
                     item.pop('probe_error', None)
+                if metadata.get('scrambled'):
+                    item['enabled'] = False
                 if not item.get('custom_name') and metadata.get('service_name'):
                     item['name'] = metadata['service_name']
                 updated = dict(item)
@@ -180,6 +189,8 @@ def build_iproxy_channels(results, excluded_endpoints=None, enabled_only=True):
     channels = []
     for item in results or []:
         if enabled_only and not item.get('enabled', True):
+            continue
+        if item.get('scrambled'):
             continue
         if endpoint_key(item.get('url')) in excluded_endpoints:
             continue

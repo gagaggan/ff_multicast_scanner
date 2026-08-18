@@ -51,6 +51,7 @@ class ResultStoreTest(unittest.TestCase):
         results = [
             {'id': 'one', 'name': 'Existing', 'url': 'udp://239.1.1.1:49220', 'enabled': True},
             {'id': 'two', 'name': 'New', 'url': 'rtp://239.1.1.2:49220', 'enabled': True},
+            {'id': 'three', 'name': 'Encrypted', 'url': 'rtp://239.1.1.3:49220', 'enabled': True, 'scrambled': True},
         ]
         excluded = {'239.1.1.1:49220'}
         channels = build_iproxy_channels(results, excluded_endpoints=excluded)
@@ -60,6 +61,19 @@ class ResultStoreTest(unittest.TestCase):
         playlist = build_m3u(channels)
         self.assertIn('#EXTM3U', playlist)
         self.assertIn('rtp://239.1.1.2:49220', playlist)
+        self.assertNotIn('rtp://239.1.1.3:49220', playlist)
+
+    def test_scrambled_result_is_disabled(self):
+        stored = self.store.merge({
+            'address': '239.1.1.3',
+            'port': 49220,
+            'url': 'rtp://239.1.1.3:49220',
+            'detected_at': '2026-08-18T00:00:00+00:00',
+            'scrambled': True,
+            'scrambled_ts_packets': 10,
+            'sample_ts_packets': 100,
+        })
+        self.assertFalse(stored['enabled'])
 
     def test_loads_iproxy_database_read_only(self):
         database = Path(self.temporary.name) / 'ff_iproxy.db'
