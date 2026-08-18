@@ -76,6 +76,25 @@ class ResultStoreTest(unittest.TestCase):
         self.assertEqual(loaded, channels)
         self.assertEqual(existing_endpoint_keys(loaded), {'239.192.67.98:49220'})
 
+    def test_updates_probe_without_incrementing_seen_count(self):
+        stored = self.store.merge({
+            'address': '239.192.67.67',
+            'port': 49220,
+            'url': 'udp://239.192.67.67:49220',
+            'detected_at': '2026-08-18T00:00:00+00:00',
+        })
+        updated = self.store.update_probe(stored['id'], {
+            'probe_ok': True,
+            'service_name': 'SBS',
+            'width': 1920,
+            'height': 1080,
+            'bit_rate': 8000000,
+            'bit_rate_source': 'measured',
+        })
+        self.assertEqual(updated['seen_count'], 1)
+        self.assertEqual(updated['name'], 'SBS')
+        self.assertEqual(self.store.get(stored['id'])['width'], 1920)
+
 
 if __name__ == '__main__':
     unittest.main()

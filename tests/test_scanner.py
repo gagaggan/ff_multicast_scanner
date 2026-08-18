@@ -63,6 +63,7 @@ class ScannerTest(unittest.TestCase):
                 {'codec_type': 'audio', 'codec_name': 'aac'},
             ],
             'format': {'format_name': 'mpegts', 'bit_rate': '10000000'},
+            'packets': [{'size': '1000'}, {'size': '2000'}],
         })
         parsed = parse_ffprobe_output(raw)
         self.assertTrue(parsed['probe_ok'])
@@ -70,6 +71,17 @@ class ScannerTest(unittest.TestCase):
         self.assertEqual(parsed['video_codec'], 'hevc')
         self.assertEqual(parsed['height'], 1080)
         self.assertEqual(parsed['bit_rate'], 10000000)
+        self.assertEqual(parsed['bit_rate_source'], 'reported')
+
+    def test_calculates_bitrate_from_packet_sample(self):
+        raw = json.dumps({
+            'streams': [{'codec_type': 'video', 'codec_name': 'h264', 'width': 1280, 'height': 720}],
+            'format': {'format_name': 'mpegts'},
+            'packets': [{'size': '1000000'}, {'size': '500000'}],
+        })
+        parsed = parse_ffprobe_output(raw, bitrate_sample_seconds=2)
+        self.assertEqual(parsed['bit_rate'], 6000000)
+        self.assertEqual(parsed['bit_rate_source'], 'measured')
 
 
 if __name__ == '__main__':

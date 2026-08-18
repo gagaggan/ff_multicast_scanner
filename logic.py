@@ -1,11 +1,13 @@
 import json
+import subprocess
 import traceback
 from pathlib import Path
 
-from flask import Response, abort, jsonify, render_template, request
+from flask import Response, abort, jsonify, render_template, request, send_file
 from plugin import F, PluginModuleBase
 
 from .manager import ScanManager
+from .preview_service import PreviewError, PreviewManager
 from .result_store import (
     build_iproxy_channels,
     build_m3u,
@@ -13,7 +15,7 @@ from .result_store import (
     existing_endpoint_keys,
     load_iproxy_channels,
 )
-from .scanner import ScanConfig, ScanValidationError, expand_target_specs
+from .scanner import ScanConfig, ScanValidationError, expand_target_specs, probe_stream
 from .setup import P
 
 
@@ -24,6 +26,7 @@ SystemModelSetting = F.SystemModelSetting
 blueprint = P.blueprint
 RESULT_PATH = Path(__file__).resolve().parent / 'data' / 'results.json'
 manager = ScanManager(RESULT_PATH, logger=logger)
+preview_manager = PreviewManager(RESULT_PATH.parent / 'preview', logger=logger)
 
 
 def parse_bool(value):
@@ -107,6 +110,7 @@ class Logic(PluginModuleBase):
         'max_targets': '8192',
         'exclude_existing': 'True',
         'iproxy_db_path': '/data/db/ff_iproxy.db',
+        'ffmpeg_path': 'ffmpeg',
     }
 
     scan_setting_keys = [
@@ -118,6 +122,7 @@ class Logic(PluginModuleBase):
         'exclude_existing',
     ]
     advanced_setting_keys = [
+        'ffmpeg_path',
         'ffprobe_path',
         'ffprobe_timeout',
         'probe_workers',
@@ -169,6 +174,27 @@ class Logic(PluginModuleBase):
                 status = manager.start(targets, config, excluded_endpoints=excluded)
                 self._save_values(req, self.scan_setting_keys)
                 return jsonify({'ret': 'success', 'msg': '스캔을 시작했습니다.', 'data': status})
+            if sub == 'probe_all':
+                status = manager.start_reprobe(build_config(req))
+                return jsonify({'ret': 'success', 'msg': '미디어 정보 확인을 시작했습니다.', 'data': status})
+            if sub == 'start_preview':
+                result = manager.store.get(req.form.get('id', ''))
+                if not result.get('probe_ok'):
+                    result = manager.store.update_probe(result['id'], probe_stream(result, build_config(req)))
+                if not result.get('video_codec'):
+                    raise RuntimeError('영상 스트림 정보를 확인하지 못했습니다.')
+                preview_manager.start(
+                    result,
+                    ffmpeg_path=ModelSetting.get('ffmpeg_path') or 'ffmpeg',
+                    interface_address=ModelSetting.get('interface_address') or '0.0.0.0',
+                )
+                base = get_base_url(req)
+                preview_url = with_apikey(f'{base}/api/preview/{result["id"]}.m3u8')
+                return jsonify({
+                    'ret': 'success',
+                    'msg': '미리보기가 준비됐습니다.',
+                    'data': {'name': result.get('name'), 'url': preview_url},
+                })
             if sub == 'stop_scan':
                 stopped = manager.stop()
                 return jsonify({
@@ -195,8 +221,21 @@ class Logic(PluginModuleBase):
                     load_iproxy_channels(_value(req, 'iproxy_db_path'))
                 self._save_values(req, self.advanced_setting_keys)
                 return jsonify({'ret': 'success', 'msg': '설정을 저장했습니다.'})
+            if sub == 'ffmpeg_version':
+                ffmpeg_path = ModelSetting.get('ffmpeg_path') or 'ffmpeg'
+                completed = subprocess.run(
+                    [ffmpeg_path, '-version'],
+                    capture_output=True,
+                    text=True,
+                    timeout=10,
+                    check=False,
+                )
+                if completed.returncode != 0:
+                    raise RuntimeError((completed.stderr or 'FFmpeg 확인에 실패했습니다.').strip())
+                version = '\n'.join(completed.stdout.splitlines()[:3])
+                return jsonify({'ret': 'success', 'msg': version})
             return jsonify({'ret': 'warning', 'msg': f'Unknown ajax: {sub}'})
-        except (ScanValidationError, ValueError, KeyError, FileNotFoundError, RuntimeError) as exception:
+        except (ScanValidationError, PreviewError, ValueError, KeyError, FileNotFoundError, RuntimeError) as exception:
             return jsonify({'ret': 'warning', 'msg': str(exception)})
         except Exception as exception:
             logger.error('Exception:%s', exception)
@@ -229,5 +268,56 @@ def api_results_m3u():
     require_api_key(request)
     channels = export_channels(include_existing=parse_bool(request.args.get('include_existing')))
     response = Response(build_m3u(channels), content_type='audio/mpegurl; charset=utf-8')
+    response.headers['Cache-Control'] = 'no-store'
+    return response
+
+
+def _preview_result(result_id):
+    try:
+        return manager.store.get(result_id)
+    except KeyError:
+        abort(404)
+
+
+@blueprint.route('/api/preview/<result_id>.m3u8', methods=['GET'])
+def api_preview_playlist(result_id):
+    require_api_key(request)
+    result = _preview_result(result_id)
+    try:
+        preview_manager.start(
+            result,
+            ffmpeg_path=ModelSetting.get('ffmpeg_path') or 'ffmpeg',
+            interface_address=ModelSetting.get('interface_address') or '0.0.0.0',
+        )
+        playlist = preview_manager.playlist_path(result_id)
+        base = get_base_url(request)
+        lines = []
+        for line in playlist.read_text(encoding='utf-8').splitlines():
+            if line.endswith('.ts'):
+                segment = Path(line).name
+                lines.append(with_apikey(f'{base}/api/preview/{result_id}/{segment}'))
+            else:
+                lines.append(line)
+        preview_manager.touch(result_id)
+        response = Response('\n'.join(lines) + '\n', content_type='application/vnd.apple.mpegurl')
+        response.headers['Cache-Control'] = 'no-store'
+        return response
+    except (PreviewError, OSError) as exception:
+        logger.warning('Preview playlist failed result=%s error=%s', result_id, exception)
+        abort(502, description=str(exception))
+
+
+@blueprint.route('/api/preview/<result_id>/<filename>', methods=['GET'])
+def api_preview_segment(result_id, filename):
+    require_api_key(request)
+    _preview_result(result_id)
+    try:
+        path = preview_manager.segment_path(result_id, filename)
+    except PreviewError:
+        abort(404)
+    if not path.exists():
+        abort(404)
+    preview_manager.touch(result_id)
+    response = send_file(path, mimetype='video/mp2t', conditional=True)
     response.headers['Cache-Control'] = 'no-store'
     return response

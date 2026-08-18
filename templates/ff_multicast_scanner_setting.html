@@ -4,6 +4,14 @@
   <div class="card-header">고급 설정</div>
   <div class="card-body">
     <div class="form-group">
+      <label for="ffmpeg_path">ffmpeg 실행 경로</label>
+      <div class="input-group">
+        <input id="ffmpeg_path" class="form-control" value="{{ arg['ffmpeg_path']|e }}">
+        <div class="input-group-append"><button id="ffmpeg_version" type="button" class="btn btn-outline-secondary">버전 확인</button></div>
+      </div>
+      <small class="form-text text-muted">검색 결과를 브라우저용 HLS로 변환할 때 사용합니다.</small>
+    </div>
+    <div class="form-group">
       <label for="ffprobe_path">ffprobe 실행 경로</label>
       <input id="ffprobe_path" class="form-control" value="{{ arg['ffprobe_path']|e }}">
     </div>
@@ -31,8 +39,21 @@
 </div>
 
 <script>
+$('#ffmpeg_version').on('click', function() {
+  $.ajax({
+    url: `/${PACKAGE_NAME}/ajax/ffmpeg_version`,
+    type: 'POST',
+    global: false,
+    success: function(ret) {
+      if (ret.ret === 'success') showModal($('<div>').text(ret.msg).html().replace(/\n/g, '<br>'), 'FFmpeg', false);
+      else $.notify(ret.msg || '', {type: 'warning'});
+    }
+  });
+});
+
 $('#save_settings').on('click', function() {
   $.post(`/${PACKAGE_NAME}/ajax/save_settings`, {
+    ffmpeg_path: $('#ffmpeg_path').val(),
     ffprobe_path: $('#ffprobe_path').val(),
     ffprobe_timeout: $('#ffprobe_timeout').val(),
     probe_workers: $('#probe_workers').val(),

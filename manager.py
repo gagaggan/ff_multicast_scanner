@@ -1,8 +1,9 @@
 import threading
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 
 from .result_store import ResultStore, endpoint_key
-from .scanner import scan_targets
+from .scanner import probe_stream, scan_targets
 
 
 def utc_now():
@@ -51,7 +52,7 @@ class ScanManager:
         filtered = [target for target in targets if f'{target}:{config.port}' not in excluded_endpoints]
         with self._lock:
             if self._thread and self._thread.is_alive():
-                raise RuntimeError('이미 스캔이 실행 중입니다.')
+                raise RuntimeError('이미 스캔 또는 미디어 정보 확인이 실행 중입니다.')
             self._stop_event = threading.Event()
             self._run_hit_keys = set()
             self._status = self._new_status()
@@ -71,6 +72,29 @@ class ScanManager:
             self._thread.start()
         return self.snapshot()
 
+    def start_reprobe(self, config):
+        config.validate()
+        results = self.store.load()
+        with self._lock:
+            if self._thread and self._thread.is_alive():
+                raise RuntimeError('이미 스캔 또는 미디어 정보 확인이 실행 중입니다.')
+            self._stop_event = threading.Event()
+            self._status = self._new_status()
+            self._status.update({
+                'state': 'probing',
+                'total': len(results),
+                'started_at': utc_now(),
+                'message': '저장된 결과의 미디어 정보를 확인합니다.',
+            })
+            self._thread = threading.Thread(
+                target=self._run_reprobe,
+                args=(results, config),
+                name='ff-multicast-reprobe',
+                daemon=True,
+            )
+            self._thread.start()
+        return self.snapshot()
+
     def stop(self):
         with self._lock:
             if not self._thread or not self._thread.is_alive():
@@ -82,7 +106,7 @@ class ScanManager:
 
     def clear_results(self):
         if self.is_active():
-            raise RuntimeError('스캔 중에는 결과를 비울 수 없습니다.')
+            raise RuntimeError('스캔 또는 미디어 정보 확인 중에는 결과를 비울 수 없습니다.')
         self.store.clear()
 
     def update_result(self, item_id, name=None, enabled=None):
@@ -141,5 +165,63 @@ class ScanManager:
                     'state': 'error',
                     'finished_at': utc_now(),
                     'message': '스캔 중 오류가 발생했습니다.',
+                    'error': str(exception),
+                })
+
+    def _run_reprobe(self, results, config):
+        if not results:
+            with self._lock:
+                self._status.update({
+                    'state': 'completed',
+                    'finished_at': utc_now(),
+                    'message': '확인할 검색 결과가 없습니다.',
+                })
+            return
+        completed_count = 0
+        verified_count = 0
+        try:
+            workers = min(config.probe_workers, len(results))
+            with ThreadPoolExecutor(max_workers=workers) as executor:
+                futures = {
+                    executor.submit(probe_stream, item, config): item
+                    for item in results
+                }
+                for future in as_completed(futures):
+                    if self._stop_event.is_set():
+                        for pending in futures:
+                            pending.cancel()
+                        break
+                    item = futures[future]
+                    probed = future.result()
+                    self.store.update_probe(item.get('id'), probed)
+                    completed_count += 1
+                    if probed.get('probe_ok'):
+                        verified_count += 1
+                    with self._lock:
+                        self._status.update({
+                            'scanned': completed_count,
+                            'found': verified_count,
+                            'current': item.get('address') or item.get('url') or '',
+                            'message': f'{completed_count}/{len(results)}개 미디어 정보를 확인했습니다.',
+                        })
+            with self._lock:
+                stopped = self._stop_event.is_set()
+                self._status.update({
+                    'state': 'stopped' if stopped else 'completed',
+                    'finished_at': utc_now(),
+                    'message': (
+                        '미디어 정보 확인을 중지했습니다.'
+                        if stopped
+                        else f'미디어 정보 확인 완료: {verified_count}/{len(results)}개'
+                    ),
+                })
+        except Exception as exception:
+            if self.logger is not None:
+                self.logger.exception('Multicast reprobe failed')
+            with self._lock:
+                self._status.update({
+                    'state': 'error',
+                    'finished_at': utc_now(),
+                    'message': '미디어 정보 확인 중 오류가 발생했습니다.',
                     'error': str(exception),
                 })

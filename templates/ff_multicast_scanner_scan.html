@@ -83,14 +83,19 @@ function renderStatus(status) {
   $('#scan_skipped').text(status.skipped_existing || 0);
   $('#scan_message').text(status.message || '');
   $('#scan_error').text(status.error || '');
-  const active = ['running', 'stopping'].includes(status.state);
+  const active = ['running', 'probing', 'stopping'].includes(status.state);
   $('#start_scan').prop('disabled', active);
   $('#stop_scan').prop('disabled', !active);
 }
 
 function pollStatus() {
-  $.get(`/${PACKAGE_NAME}/ajax/status`, function(ret) {
-    if (ret && ret.data) renderStatus(ret.data);
+  $.ajax({
+    url: `/${PACKAGE_NAME}/ajax/status`,
+    type: 'GET',
+    global: false,
+    success: function(ret) {
+      if (ret && ret.data) renderStatus(ret.data);
+    }
   });
 }
 
