@@ -84,10 +84,10 @@ def build_ffmpeg_command(ffmpeg_path, source_url, output_dir, video_codec='', au
         '-sc_threshold',
         '0',
     ])
-    if audio_codec == 'aac':
-        command.extend(['-c:a', 'copy'])
-    else:
-        command.extend(['-c:a', 'aac', '-b:a', '128k', '-ac', '2'])
+    # AAC frames from multicast sources can also be malformed. Normalize the
+    # audio so the browser never receives corrupt ADTS data or an unsupported
+    # source profile.
+    command.extend(['-c:a', 'aac', '-b:a', '128k', '-ar', '48000', '-ac', '2'])
     command.extend([
         '-max_muxing_queue_size',
         '1024',

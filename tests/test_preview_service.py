@@ -18,14 +18,17 @@ class PreviewServiceTest(unittest.TestCase):
         self.assertIn('localaddr=192.168.29.230', url)
         self.assertIn('overrun_nonfatal=1', url)
 
-    def test_video_is_always_transcoded_and_audio_is_normalized(self):
+    def test_video_and_audio_are_always_normalized(self):
         with tempfile.TemporaryDirectory() as directory:
             h264 = build_ffmpeg_command('ffmpeg', 'udp://239.1.2.3:49220', Path(directory), 'h264', 'aac')
             hevc = build_ffmpeg_command('ffmpeg', 'udp://239.1.2.3:49220', Path(directory), 'hevc', 'ac3')
         self.assertIn('libx264', h264)
         self.assertIn('libx264', hevc)
-        self.assertIn('copy', h264)
+        self.assertNotIn('copy', h264)
+        self.assertIn('aac', h264)
         self.assertIn('aac', hevc)
+        self.assertEqual(h264[h264.index('-c:a') + 1], 'aac')
+        self.assertEqual(hevc[hevc.index('-c:a') + 1], 'aac')
 
 
 if __name__ == '__main__':
