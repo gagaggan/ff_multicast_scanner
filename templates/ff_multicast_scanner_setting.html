@@ -1,0 +1,46 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">고급 설정</div>
+  <div class="card-body">
+    <div class="form-group">
+      <label for="ffprobe_path">ffprobe 실행 경로</label>
+      <input id="ffprobe_path" class="form-control" value="{{ arg['ffprobe_path']|e }}">
+    </div>
+    <div class="form-row">
+      <div class="form-group col-md-4">
+        <label for="ffprobe_timeout">ffprobe 제한 시간(초)</label>
+        <input id="ffprobe_timeout" type="number" min="0.5" max="30" step="0.5" class="form-control" value="{{ arg['ffprobe_timeout']|e }}">
+      </div>
+      <div class="form-group col-md-4">
+        <label for="probe_workers">ffprobe 동시 작업 수</label>
+        <input id="probe_workers" type="number" min="1" max="4" class="form-control" value="{{ arg['probe_workers']|e }}">
+      </div>
+      <div class="form-group col-md-4">
+        <label for="max_targets">최대 주소 수</label>
+        <input id="max_targets" type="number" min="1" max="65536" class="form-control" value="{{ arg['max_targets']|e }}">
+      </div>
+    </div>
+    <div class="form-group">
+      <label for="iproxy_db_path">I-Proxy DB 경로</label>
+      <input id="iproxy_db_path" class="form-control" value="{{ arg['iproxy_db_path']|e }}">
+      <small class="form-text text-muted">기존 주소를 확인할 때 읽기 전용으로 사용합니다.</small>
+    </div>
+    <button id="save_settings" class="btn btn-primary">저장</button>
+  </div>
+</div>
+
+<script>
+$('#save_settings').on('click', function() {
+  $.post(`/${PACKAGE_NAME}/ajax/save_settings`, {
+    ffprobe_path: $('#ffprobe_path').val(),
+    ffprobe_timeout: $('#ffprobe_timeout').val(),
+    probe_workers: $('#probe_workers').val(),
+    max_targets: $('#max_targets').val(),
+    iproxy_db_path: $('#iproxy_db_path').val()
+  }, function(ret) {
+    $.notify(ret.msg || '', {type: ret.ret === 'success' ? 'success' : 'warning'});
+  });
+});
+</script>
+{% endblock %}

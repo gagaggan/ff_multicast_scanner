@@ -1,0 +1,114 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid px-0">
+  <div class="card mb-3">
+    <div class="card-header">멀티캐스트 스캔</div>
+    <div class="card-body">
+      <div class="form-group">
+        <label for="scan_ranges">주소 범위</label>
+        <textarea id="scan_ranges" class="form-control" rows="5" placeholder="239.192.67.0/24">{{ arg['scan_ranges']|e }}</textarea>
+        <small class="form-text text-muted">한 줄에 CIDR, 시작-끝 범위 또는 단일 멀티캐스트 주소를 입력하세요.</small>
+      </div>
+      <div class="form-row">
+        <div class="form-group col-md-3">
+          <label for="scan_port">포트</label>
+          <input id="scan_port" class="form-control" type="number" min="1" max="65535" value="{{ arg['scan_port']|e }}">
+        </div>
+        <div class="form-group col-md-3">
+          <label for="interface_address">수신 인터페이스 IPv4</label>
+          <input id="interface_address" class="form-control" value="{{ arg['interface_address']|e }}" placeholder="0.0.0.0">
+        </div>
+        <div class="form-group col-md-3">
+          <label for="batch_size">배치 크기</label>
+          <input id="batch_size" class="form-control" type="number" min="1" max="32" value="{{ arg['batch_size']|e }}">
+        </div>
+        <div class="form-group col-md-3">
+          <label for="dwell_seconds">주소 수신 시간(초)</label>
+          <input id="dwell_seconds" class="form-control" type="number" min="0.2" max="30" step="0.1" value="{{ arg['dwell_seconds']|e }}">
+        </div>
+      </div>
+      <div class="form-check mb-3">
+        <input id="exclude_existing" class="form-check-input" type="checkbox" {% if arg['exclude_existing'] == 'True' %}checked{% endif %}>
+        <label class="form-check-label" for="exclude_existing">I-Proxy에 이미 등록된 주소 {{ arg['existing_count'] }}개 제외</label>
+      </div>
+      {% if arg['iproxy_error'] %}
+      <div class="alert alert-warning py-2">I-Proxy 목록을 읽지 못했습니다: {{ arg['iproxy_error']|e }}</div>
+      {% endif %}
+      <button id="start_scan" class="btn btn-primary">스캔 시작</button>
+      <button id="stop_scan" class="btn btn-outline-danger">중지</button>
+      <a class="btn btn-outline-secondary" href="/{{ arg['package_name'] }}/results">검색 결과</a>
+    </div>
+  </div>
+
+  <div class="card">
+    <div class="card-header">진행 상태</div>
+    <div class="card-body">
+      <div class="progress mb-2" style="height: 24px;">
+        <div id="scan_progress" class="progress-bar" role="progressbar" style="width: 0%">0%</div>
+      </div>
+      <div id="scan_message" class="mb-2"></div>
+      <div class="row small text-muted">
+        <div class="col-md-3">상태: <span id="scan_state"></span></div>
+        <div class="col-md-3">확인: <span id="scan_count"></span></div>
+        <div class="col-md-3">발견: <span id="scan_found"></span></div>
+        <div class="col-md-3">기존 제외: <span id="scan_skipped"></span></div>
+      </div>
+      <div id="scan_error" class="text-danger mt-2"></div>
+    </div>
+  </div>
+</div>
+
+<script>
+const initialStatus = {{ arg['status']|tojson }};
+
+function scanFormData() {
+  return {
+    scan_ranges: $('#scan_ranges').val(),
+    scan_port: $('#scan_port').val(),
+    interface_address: $('#interface_address').val(),
+    batch_size: $('#batch_size').val(),
+    dwell_seconds: $('#dwell_seconds').val(),
+    exclude_existing: $('#exclude_existing').is(':checked') ? 'True' : 'False'
+  };
+}
+
+function renderStatus(status) {
+  const total = Number(status.total || 0);
+  const scanned = Number(status.scanned || 0);
+  const percent = total > 0 ? Math.min(100, Math.round((scanned / total) * 100)) : 0;
+  $('#scan_progress').css('width', `${percent}%`).text(`${percent}%`);
+  $('#scan_state').text(status.state || 'idle');
+  $('#scan_count').text(`${scanned}/${total}`);
+  $('#scan_found').text(status.found || 0);
+  $('#scan_skipped').text(status.skipped_existing || 0);
+  $('#scan_message').text(status.message || '');
+  $('#scan_error').text(status.error || '');
+  const active = ['running', 'stopping'].includes(status.state);
+  $('#start_scan').prop('disabled', active);
+  $('#stop_scan').prop('disabled', !active);
+}
+
+function pollStatus() {
+  $.get(`/${PACKAGE_NAME}/ajax/status`, function(ret) {
+    if (ret && ret.data) renderStatus(ret.data);
+  });
+}
+
+$('#start_scan').on('click', function() {
+  $.post(`/${PACKAGE_NAME}/ajax/start_scan`, scanFormData(), function(ret) {
+    $.notify(ret.msg || '', {type: ret.ret === 'success' ? 'success' : 'warning'});
+    if (ret.data) renderStatus(ret.data);
+  });
+});
+
+$('#stop_scan').on('click', function() {
+  $.post(`/${PACKAGE_NAME}/ajax/stop_scan`, {}, function(ret) {
+    $.notify(ret.msg || '', {type: ret.ret === 'success' ? 'success' : 'warning'});
+    if (ret.data) renderStatus(ret.data);
+  });
+});
+
+renderStatus(initialStatus);
+setInterval(pollStatus, 1000);
+</script>
+{% endblock %}

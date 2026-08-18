@@ -1,0 +1,17 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="card">
+  <div class="card-header">사용 안내</div>
+  <div class="card-body">
+    <ol>
+      <li>스캔 메뉴에서 멀티캐스트 CIDR 또는 IP 범위와 포트를 입력합니다.</li>
+      <li>처음에는 <code>/24</code> 한 개와 배치 크기 4로 확인하는 것을 권장합니다.</li>
+      <li>검색 결과에서 채널명을 정리하고 내보낼 항목만 활성화합니다.</li>
+      <li>JSON 또는 M3U URL을 I-Proxy 편집 화면의 ‘채널 목록 가져오기’에 입력합니다.</li>
+    </ol>
+    <div class="alert alert-info mb-0">
+      이 플러그인은 I-Proxy DB를 수정하지 않습니다. 검색 결과 가져오기와 최종 저장은 I-Proxy 화면에서 사용자가 수행합니다.
+    </div>
+  </div>
+</div>
+{% endblock %}

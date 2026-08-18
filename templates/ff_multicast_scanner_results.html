@@ -1,0 +1,76 @@
+{% extends "base.html" %}
+{% block content %}
+<div class="container-fluid px-0">
+  <div class="card mb-3">
+    <div class="card-header">I-Proxy 호환 내보내기</div>
+    <div class="card-body">
+      <p class="mb-2">활성화된 신규 결과만 내보냅니다. 아래 URL을 I-Proxy의 ‘채널 목록 가져오기’에 입력할 수 있습니다.</p>
+      <div class="input-group input-group-sm mb-2">
+        <div class="input-group-prepend"><span class="input-group-text">JSON</span></div>
+        <input class="form-control" readonly value="{{ arg['json_url']|e }}">
+        <div class="input-group-append"><a class="btn btn-outline-primary" href="{{ arg['json_url']|e }}" target="_blank">열기</a></div>
+      </div>
+      <div class="input-group input-group-sm">
+        <div class="input-group-prepend"><span class="input-group-text">M3U</span></div>
+        <input class="form-control" readonly value="{{ arg['m3u_url']|e }}">
+        <div class="input-group-append"><a class="btn btn-outline-primary" href="{{ arg['m3u_url']|e }}" target="_blank">열기</a></div>
+      </div>
+    </div>
+  </div>
+
+  <div class="d-flex justify-content-between align-items-center mb-2">
+    <div>총 {{ arg['results']|length }}개 결과</div>
+    <div>
+      <button class="btn btn-sm btn-outline-secondary" onclick="location.reload()">새로고침</button>
+      <button id="clear_results" class="btn btn-sm btn-outline-danger">전체 삭제</button>
+    </div>
+  </div>
+
+  <div class="table-responsive">
+    <table class="table table-sm table-striped table-hover">
+      <thead class="thead-dark">
+        <tr>
+          <th>사용</th><th>이름</th><th>주소</th><th>영상</th><th>해상도</th><th>비트레이트</th><th>상태</th><th></th>
+        </tr>
+      </thead>
+      <tbody>
+      {% for row in arg['results'] %}
+        <tr data-result-id="{{ row['id']|e }}">
+          <td><input class="result-enabled" type="checkbox" {% if row['enabled'] %}checked{% endif %}></td>
+          <td><input class="form-control form-control-sm result-name" value="{{ row['name']|e }}"></td>
+          <td><code>{{ row['url']|e }}</code></td>
+          <td>{{ row['video_codec']|default('', true)|e }}</td>
+          <td>{% if row['width']|default(0) %}{{ row['width'] }}×{{ row['height'] }}{% endif %}</td>
+          <td>{% if row['bit_rate']|default(0) %}{{ (row['bit_rate'] / 1000000)|round(1) }} Mbps{% endif %}</td>
+          <td>{% if row['existing'] %}<span class="badge badge-secondary">기존</span>{% elif row['probe_ok'] %}<span class="badge badge-success">검증</span>{% else %}<span class="badge badge-info">감지</span>{% endif %}</td>
+          <td><button class="btn btn-sm btn-outline-primary save-result">저장</button></td>
+        </tr>
+      {% else %}
+        <tr><td colspan="8" class="text-center text-muted">검색 결과가 없습니다.</td></tr>
+      {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</div>
+
+<script>
+$('.save-result').on('click', function() {
+  const row = $(this).closest('tr');
+  $.post(`/${PACKAGE_NAME}/ajax/update_result`, {
+    id: row.data('result-id'),
+    name: row.find('.result-name').val(),
+    enabled: row.find('.result-enabled').is(':checked') ? 'True' : 'False'
+  }, function(ret) {
+    $.notify(ret.msg || '', {type: ret.ret === 'success' ? 'success' : 'warning'});
+  });
+});
+
+$('#clear_results').on('click', function() {
+  if (!confirm('저장된 검색 결과를 모두 삭제할까요?')) return;
+  $.post(`/${PACKAGE_NAME}/ajax/clear_results`, {}, function(ret) {
+    $.notify(ret.msg || '', {type: ret.ret === 'success' ? 'success' : 'warning'});
+    if (ret.ret === 'success') location.reload();
+  });
+});
+</script>
+{% endblock %}
