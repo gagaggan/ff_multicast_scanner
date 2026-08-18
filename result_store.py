@@ -106,6 +106,48 @@ class ResultStore:
             self.save(results)
             return updated
 
+    def get(self, item_id):
+        for item in self.load():
+            if str(item.get('id')) == str(item_id):
+                return dict(item)
+        raise KeyError('검색 결과를 찾을 수 없습니다.')
+
+    def update_probe(self, item_id, metadata):
+        allowed = {
+            'probe_ok',
+            'probe_error',
+            'service_name',
+            'service_provider',
+            'format_name',
+            'bit_rate',
+            'bit_rate_source',
+            'video_codec',
+            'width',
+            'height',
+            'frame_rate',
+            'audio_codec',
+            'program_count',
+        }
+        with self._lock:
+            results = self.load()
+            updated = None
+            for item in results:
+                if str(item.get('id')) != str(item_id):
+                    continue
+                for key in allowed:
+                    if key in metadata:
+                        item[key] = metadata[key]
+                if metadata.get('probe_ok'):
+                    item.pop('probe_error', None)
+                if not item.get('custom_name') and metadata.get('service_name'):
+                    item['name'] = metadata['service_name']
+                updated = dict(item)
+                break
+            if updated is None:
+                raise KeyError('검색 결과를 찾을 수 없습니다.')
+            self.save(results)
+            return updated
+
     def clear(self):
         self.save([])
 

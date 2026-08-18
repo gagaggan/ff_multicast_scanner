@@ -13,6 +13,7 @@ from datetime import datetime, timezone
 
 TS_PACKET_SIZE = 188
 MAX_HARD_TARGETS = 65536
+BITRATE_SAMPLE_SECONDS = 2.0
 
 
 class ScanValidationError(ValueError):
@@ -244,7 +245,7 @@ def _first_stream(streams, codec_type):
     return {}
 
 
-def parse_ffprobe_output(raw):
+def parse_ffprobe_output(raw, bitrate_sample_seconds=BITRATE_SAMPLE_SECONDS):
     data = json.loads(raw or '{}')
     programmes = data.get('programs') or []
     streams = data.get('streams') or []
@@ -259,6 +260,13 @@ def parse_ffprobe_output(raw):
     video = _first_stream(streams, 'video')
     audio = _first_stream(streams, 'audio')
     format_data = data.get('format') or {}
+    bit_rate = int(format_data.get('bit_rate') or 0)
+    bit_rate_source = 'reported' if bit_rate else ''
+    if not bit_rate and bitrate_sample_seconds:
+        packet_bytes = sum(int(packet.get('size') or 0) for packet in data.get('packets') or [])
+        if packet_bytes:
+            bit_rate = int((packet_bytes * 8) / float(bitrate_sample_seconds))
+            bit_rate_source = 'measured'
 
     service_name = str(tags.get('service_name') or tags.get('SERVICE_NAME') or '').strip()
     service_provider = str(tags.get('service_provider') or tags.get('SERVICE_PROVIDER') or '').strip()
@@ -267,7 +275,8 @@ def parse_ffprobe_output(raw):
         'service_name': service_name,
         'service_provider': service_provider,
         'format_name': format_data.get('format_name') or '',
-        'bit_rate': int(format_data.get('bit_rate') or 0),
+        'bit_rate': bit_rate,
+        'bit_rate_source': bit_rate_source,
         'video_codec': video.get('codec_name') or '',
         'width': int(video.get('width') or 0),
         'height': int(video.get('height') or 0),
@@ -288,11 +297,16 @@ def probe_stream(hit, config):
         '3000000',
         '-probesize',
         '3000000',
+        '-read_intervals',
+        f'%+{BITRATE_SAMPLE_SECONDS:g}',
         '-print_format',
         'json',
         '-show_programs',
         '-show_streams',
         '-show_format',
+        '-show_packets',
+        '-show_entries',
+        'program:stream:format:packet=size',
         target,
     ]
     try:
